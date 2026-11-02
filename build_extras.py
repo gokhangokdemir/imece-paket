@@ -69,6 +69,13 @@ WD_QUERIES = [
 ]
 
 
+QLEVER_PREFIXES = """PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+"""
+
+
 def fmt_value(prop, raw):
     if raw is None:
         return None
@@ -97,12 +104,21 @@ def build_facts(out):
             {body}
             ?item rdfs:label ?label . FILTER(LANG(?label) = 'tr')
         }}"""
-        url = "https://query.wikidata.org/sparql?format=json&query=" + urllib.parse.quote(q)
+        res = None
         try:
-            res = http_json(url, timeout=120)
+            url = "https://query.wikidata.org/sparql?format=json&query=" + urllib.parse.quote(q)
+            res = http_json(url, timeout=120, tries=2)
         except Exception as e:  # noqa: BLE001
-            print(f"Vikiveri sorgusu atlandı ({prop}): {e}", file=sys.stderr)
-            continue
+            print(f"WDQS başarısız ({prop}): {e}; QLever deneniyor", file=sys.stderr)
+        if res is None:
+            # QLever: büyük taramalarda çok daha hızlı, önekleri açıkça ister
+            ql = QLEVER_PREFIXES + q
+            try:
+                url = "https://qlever.cs.uni-freiburg.de/api/wikidata?query=" + urllib.parse.quote(ql)
+                res = http_json(url, timeout=300, tries=2)
+            except Exception as e:  # noqa: BLE001
+                print(f"Vikiveri sorgusu atlandı ({prop}): {e}", file=sys.stderr)
+                continue
         n = 0
         for b in res["results"]["bindings"]:
             label = b["label"]["value"]
@@ -247,7 +263,8 @@ def build_places(out):
             if not c:
                 continue
             lat, lon = round(c[0], 6), round(c[1], 6)
-            key = (kind, round(lat, 4), round(lon, 4))
+            name0 = (tags.get("name:tr") or tags.get("name") or "").strip().lower()
+            key = (kind, name0, round(lat, 3), round(lon, 3)) if name0 else (kind, round(lat, 4), round(lon, 4))
             if key in seen:
                 continue
             seen.add(key)
