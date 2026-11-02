@@ -1,0 +1,53 @@
+# Türkçe Vikipedi'den çevrimdışı bilgi paketini üretir ve "paket" sürümü olarak yayınlar.
+# Uygulama paketi şu adresten indirir:
+# https://github.com/gokhangokdemir/imece-paket/releases/download/paket/manifest.json
+name: Bilgi paketi
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['build_pack.py', '.github/workflows/paket.yml']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: paket
+  cancel-in-progress: true
+
+jobs:
+  paket:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Araçları kur
+        run: pip install "pyarrow>=17"
+
+      - name: Vikipedi verisini indir
+        run: |
+          mkdir -p kaynak
+          for i in 00000 00001; do
+            curl -fL --retry 5 -o "kaynak/$i.parquet" \
+              "https://huggingface.co/datasets/wikimedia/wikipedia/resolve/main/20231101.tr/train-$i-of-00002.parquet"
+          done
+          ls -la kaynak
+
+      - name: Paketi üret
+        run: python build_pack.py --out dist --limit 130000 --shards 8 kaynak/*.parquet
+
+      - name: Yayınla
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete paket --yes --cleanup-tag || true
+          gh release create paket dist/* \
+            --title "Bilgi paketi" \
+            --notes "Türkçe Vikipedi'den hazırlanmış çevrimdışı bilgi paketi. İçerik: Vikipedi katkıcıları, CC BY-SA 4.0." \
+            --latest
