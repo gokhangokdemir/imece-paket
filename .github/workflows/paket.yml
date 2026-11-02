@@ -28,7 +28,9 @@ jobs:
           python-version: '3.12'
 
       - name: Araçları kur
-        run: pip install "pyarrow>=17" numpy
+        run: |
+          pip install "pyarrow>=17" numpy
+          sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
 
       - name: Vikipedi verisini indir
         run: |

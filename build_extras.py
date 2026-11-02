@@ -32,7 +32,7 @@ def http_json(url, data=None, timeout=900, tries=4):
         try:
             req = urllib.request.Request(url, data=data, headers={"User-Agent": UA, "Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.load(r)
+                return json.loads(r.read().decode("utf-8", "replace"), strict=False)
         except Exception as e:  # noqa: BLE001
             last = e
             print(f"  deneme {i + 1} başarısız: {e}", file=sys.stderr)
@@ -62,10 +62,10 @@ WD_QUERIES = [
     ("Uzunluk (km)", "?item wdt:P31 wd:Q4022 . ?item wdt:P2043 ?v . FILTER(?v > 100)"),
     ("Yüzölçümü (km²)", "?item wdt:P31 wd:Q23397 . ?item wdt:P2046 ?v . FILTER(?v > 50)"),
     # Tanınmış kişiler (en az 60 dilde maddesi olanlar)
-    ("Doğum tarihi", "?item wdt:P31 wd:Q5 ; wikibase:sitelinks ?sl . FILTER(?sl > 60) ?item wdt:P569 ?v ."),
-    ("Ölüm tarihi", "?item wdt:P31 wd:Q5 ; wikibase:sitelinks ?sl . FILTER(?sl > 60) ?item wdt:P570 ?v ."),
-    ("Doğum yeri", "?item wdt:P31 wd:Q5 ; wikibase:sitelinks ?sl . FILTER(?sl > 60) ?item wdt:P19 ?c . ?c rdfs:label ?v . FILTER(LANG(?v) = 'tr')"),
-    ("Meslek", "?item wdt:P31 wd:Q5 ; wikibase:sitelinks ?sl . FILTER(?sl > 60) ?item wdt:P106 ?c . ?c rdfs:label ?v . FILTER(LANG(?v) = 'tr')"),
+    ("Doğum tarihi", "?item wdt:P31 wd:Q5 ; wikibase:sitelinks ?sl . FILTER(?sl > 90) ?item wdt:P569 ?v ."),
+    ("Ölüm tarihi", "?item wdt:P31 wd:Q5 ; wikibase:sitelinks ?sl . FILTER(?sl > 90) ?item wdt:P570 ?v ."),
+    ("Doğum yeri", "?item wdt:P31 wd:Q5 ; wikibase:sitelinks ?sl . FILTER(?sl > 90) ?item wdt:P19 ?c . ?c rdfs:label ?v . FILTER(LANG(?v) = 'tr')"),
+    ("Meslek", "?item wdt:P31 wd:Q5 ; wikibase:sitelinks ?sl . FILTER(?sl > 90) ?item wdt:P106 ?c . ?c rdfs:label ?v . FILTER(LANG(?v) = 'tr')"),
 ]
 
 
@@ -146,7 +146,7 @@ def build_facts(out):
 
 # ---------------- OpenStreetMap ----------------
 
-OSM_QUERY = """
+_UNUSED_OSM_QUERY = """
 [out:json][timeout:900][maxsize:2000000000];
 area["ISO3166-1"="TR"][admin_level=2]->.tr;
 (
@@ -172,17 +172,52 @@ KIND = {
 }
 
 
+PBF_URL = "https://download.geofabrik.de/europe/turkey-latest.osm.pbf"
+
+
+def _centroid(geom):
+    t = geom.get("type")
+    c = geom.get("coordinates")
+    if t == "Point":
+        return c[1], c[0]
+    pts = []
+
+    def walk(x):
+        if isinstance(x, (list, tuple)) and x and isinstance(x[0], (int, float)):
+            pts.append(x)
+        elif isinstance(x, (list, tuple)):
+            for y in x:
+                walk(y)
+
+    walk(c)
+    if not pts:
+        return None
+    return sum(p[1] for p in pts) / len(pts), sum(p[0] for p in pts) / len(pts)
+
+
 def build_places(out):
-    data = urllib.parse.urlencode({"data": OSM_QUERY}).encode()
-    res = None
-    for ep in ("https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"):
-        try:
-            res = http_json(ep, data=data, timeout=1200, tries=2)
-            break
-        except Exception as e:  # noqa: BLE001
-            print(f"Overpass ({ep}) başarısız: {e}", file=sys.stderr)
-    if res is None:
-        return None, 0
+    """Türkiye OSM verisi (Geofabrik) + osmium ile acil durum yerleri."""
+    import subprocess
+
+    work = os.path.join(out, "..", "osm")
+    os.makedirs(work, exist_ok=True)
+    pbf = os.path.join(work, "turkey.osm.pbf")
+    flt = os.path.join(work, "filtered.osm.pbf")
+    seq = os.path.join(work, "yerler.geojsonseq")
+    if not os.path.exists(pbf):
+        subprocess.run(["curl", "-fL", "--retry", "5", "-o", pbf, PBF_URL], check=True)
+    subprocess.run(
+        [
+            "osmium", "tags-filter", pbf,
+            "nwr/amenity=hospital,clinic,pharmacy,doctors,fire_station,police,drinking_water,shelter,school",
+            "nwr/emergency=assembly_point,ambulance_station",
+            "nwr/healthcare=hospital",
+            "-o", flt, "--overwrite",
+        ],
+        check=True,
+    )
+    subprocess.run(["osmium", "export", flt, "-f", "geojsonseq", "-o", seq, "--overwrite"], check=True)
+
     path = os.path.join(out, "yerler.db")
     if os.path.exists(path):
         os.remove(path)
@@ -194,19 +229,32 @@ def build_places(out):
         """
     )
     n = 0
-    for el in res.get("elements", []):
-        tags = el.get("tags", {})
-        kind = KIND.get(tags.get("emergency")) or KIND.get(tags.get("amenity")) or ("hastane" if tags.get("healthcare") == "hospital" else None)
-        if not kind:
-            continue
-        lat = el.get("lat") or el.get("center", {}).get("lat")
-        lon = el.get("lon") or el.get("center", {}).get("lon")
-        if lat is None or lon is None:
-            continue
-        name = tags.get("name:tr") or tags.get("name") or ""
-        addr = ", ".join(x for x in (tags.get("addr:street"), tags.get("addr:district"), tags.get("addr:city")) if x)
-        con.execute("INSERT INTO y (k, n, lat, lon, a) VALUES (?, ?, ?, ?, ?)", (kind, name[:80], round(lat, 6), round(lon, 6), addr[:120]))
-        n += 1
+    seen = set()
+    with open(seq, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip().lstrip("\x1e")
+            if not line:
+                continue
+            try:
+                feat = json.loads(line)
+            except ValueError:
+                continue
+            tags = feat.get("properties", {})
+            kind = KIND.get(tags.get("emergency")) or KIND.get(tags.get("amenity")) or ("hastane" if tags.get("healthcare") == "hospital" else None)
+            if not kind:
+                continue
+            c = _centroid(feat.get("geometry") or {})
+            if not c:
+                continue
+            lat, lon = round(c[0], 6), round(c[1], 6)
+            key = (kind, round(lat, 4), round(lon, 4))
+            if key in seen:
+                continue
+            seen.add(key)
+            name = tags.get("name:tr") or tags.get("name") or ""
+            addr = ", ".join(x for x in (tags.get("addr:street"), tags.get("addr:district"), tags.get("addr:city")) if x)
+            con.execute("INSERT INTO y (k, n, lat, lon, a) VALUES (?, ?, ?, ?, ?)", (kind, name[:80], lat, lon, addr[:120]))
+            n += 1
     con.commit()
     con.execute("VACUUM")
     con.close()
@@ -299,7 +347,11 @@ if __name__ == "__main__":
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     facts = build_facts(a.out)
-    places = build_places(a.out)
+    try:
+        places = build_places(a.out)
+    except Exception as e:  # noqa: BLE001
+        print(f"yerler.db üretilemedi: {e}", file=sys.stderr)
+        places = (None, 0)
     try:
         related = build_related(a.out)
     except Exception as e:  # noqa: BLE001
