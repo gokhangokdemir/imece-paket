@@ -3,11 +3,13 @@
 
 - olgular.db : Vikiveri'den kesin bilgiler (nüfus, başkent, yükseklik, doğum tarihi…)
 - yerler.db  : OpenStreetMap'ten Türkiye'deki hastane, eczane, toplanma alanı, su noktası…
+- anlam.db   : fastText Türkçe kelime vektörlerinden "anlamca yakın kelimeler" (aramayı genişletir)
 
 Kullanım:
     python build_extras.py --out dist
 
-Lisanslar: Vikiveri CC0; OpenStreetMap © OpenStreetMap katkıcıları, ODbL.
+Lisanslar: Vikiveri CC0; OpenStreetMap © OpenStreetMap katkıcıları, ODbL;
+fastText vektörleri (Facebook AI) CC BY-SA 3.0.
 """
 
 import argparse
@@ -212,6 +214,63 @@ def build_places(out):
     return path, n
 
 
+# ---------------- Anlam (kelime vektörleri) ----------------
+
+VEC_URL = "https://dl.fbaipublicfiles.com/fasttext/vectors-crawl/cc.tr.300.vec.gz"
+
+
+def build_related(out, words=80000, k=6, min_sim=0.55):
+    import gzip
+
+    import numpy as np
+
+    vocab, vecs, seen = [], [], set()
+    req = urllib.request.Request(VEC_URL, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=600) as r, gzip.GzipFile(fileobj=r) as gz:
+        gz.readline()  # başlık
+        for raw in gz:
+            parts = raw.decode("utf-8", "ignore").rstrip().split(" ")
+            w = parts[0]
+            if not w.isalpha() or len(w) < 3:
+                continue
+            nw = normalize(w)
+            if not nw or " " in nw or nw in seen:
+                continue
+            seen.add(nw)
+            vocab.append(nw)
+            vecs.append(np.asarray(parts[1:301], dtype=np.float32))
+            if len(vocab) >= words:
+                break
+    m = np.vstack(vecs)
+    m /= np.linalg.norm(m, axis=1, keepdims=True) + 1e-8
+    path = os.path.join(out, "anlam.db")
+    if os.path.exists(path):
+        os.remove(path)
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE r (w TEXT PRIMARY KEY, n TEXT NOT NULL) WITHOUT ROWID")
+    n = 0
+    step = 2000
+    for i in range(0, len(vocab), step):
+        sims = m[i : i + step] @ m.T
+        for j in range(sims.shape[0]):
+            sims[j, i + j] = -1
+        top = np.argpartition(-sims, k, axis=1)[:, :k]
+        for j in range(sims.shape[0]):
+            w = vocab[i + j]
+            cand = sorted(((float(sims[j, t]), vocab[t]) for t in top[j]), reverse=True)
+            # aynı kökten türeyen kelimeleri ("ankara" -> "ankarada") ele, anlamca yakın olanları tut
+            rel = [v for s_, v in cand if s_ >= min_sim and not v.startswith(w[:4]) and not w.startswith(v[:4])]
+            if rel:
+                con.execute("INSERT INTO r VALUES (?, ?)", (w, " ".join(rel[:4])))
+                n += 1
+        print(f"  anlam: {min(i + step, len(vocab))}/{len(vocab)}")
+    con.commit()
+    con.execute("VACUUM")
+    con.close()
+    print(f"anlam.db: {n} kelime")
+    return path, n
+
+
 def add_to_manifest(out, entries):
     import hashlib
 
@@ -241,10 +300,16 @@ if __name__ == "__main__":
     os.makedirs(a.out, exist_ok=True)
     facts = build_facts(a.out)
     places = build_places(a.out)
+    try:
+        related = build_related(a.out)
+    except Exception as e:  # noqa: BLE001
+        print(f"anlam.db üretilemedi: {e}", file=sys.stderr)
+        related = (None, 0)
     add_to_manifest(
         a.out,
         [
             ("olgular", facts[0], facts[1], "Vikiveri", "CC0"),
             ("yerler", places[0], places[1], "OpenStreetMap", "ODbL · © OpenStreetMap katkıcıları"),
+            ("anlam", related[0], related[1], "fastText (Facebook AI)", "CC BY-SA 3.0"),
         ],
     )
