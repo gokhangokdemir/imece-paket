@@ -5,6 +5,8 @@
 
 - **Kaynak:** Türkçe Vikipedi (Hugging Face `wikimedia/wikipedia`, `20231101.tr`)
 - **İçerik:** En kapsamlı ~130.000 maddenin giriş bölümleri, SQLite FTS5 ile aranabilir, 8 parça
+- **Ek dosyalar:** `olgular.db` (Vikiveri'den nüfus, başkent, yükseklik, doğum tarihi gibi kesin bilgiler, CC0) ve
+  `yerler.db` (OpenStreetMap'ten hastane, eczane, toplanma alanı, su noktası; © OpenStreetMap katkıcıları, ODbL)
 - **Lisans:** Paket içeriği Vikipedi katkıcılarına aittir ve
   [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/deed.tr) ile lisanslanmıştır.
   Her maddenin kaynağı paketteki adres alanında yer alır.

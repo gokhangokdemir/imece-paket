@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['build_pack.py', '.github/workflows/paket.yml']
+    paths: ['build_pack.py', 'build_extras.py', '.github/workflows/paket.yml']
 
 permissions:
   contents: write
@@ -41,6 +41,10 @@ jobs:
 
       - name: Paketi üret
         run: python build_pack.py --out dist --limit 130000 --shards 8 kaynak/*.parquet
+
+      - name: Vikiveri bilgileri ve OpenStreetMap yerleri
+        run: python build_extras.py --out dist
+        continue-on-error: true
 
       - name: Yayınla
         env:
