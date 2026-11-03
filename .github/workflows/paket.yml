@@ -45,8 +45,19 @@ jobs:
         run: python build_pack.py --out dist --limit 130000 --shards 8 kaynak/*.parquet
 
       - name: Vikiveri bilgileri ve OpenStreetMap yerleri
+        # hata olursa yayınlama: önceki sağlam paket yerinde kalsın
         run: python build_extras.py --out dist
-        continue-on-error: true
+
+      - name: Paketi doğrula
+        run: |
+          python - <<'PY'
+          import json
+          m = json.load(open("dist/manifest.json"))
+          kinds = {e["kind"] for e in m.get("extras", [])}
+          assert m["articles"] > 100000, m["articles"]
+          assert {"olgular", "yerler", "anlam"} <= kinds, kinds
+          print("paket tamam:", m["articles"], sorted(kinds))
+          PY
 
       - name: Yayınla
         env:

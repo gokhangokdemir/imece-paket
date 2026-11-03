@@ -81,8 +81,16 @@ def fmt_value(prop, raw):
         return None
     if prop.endswith("tarihi"):
         # +1881-05-19T00:00:00Z biçimi
-        m = raw.lstrip("+")[:10]
-        y, mo, d = m.split("-")
+        neg = raw.startswith("-")
+        parts = raw.lstrip("+-").split("T")[0].split("-")
+        if len(parts) != 3:
+            return None
+        y, mo, d = parts
+        if neg:
+            try:
+                return f"MÖ {int(y)}"
+            except ValueError:
+                return None
         aylar = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
         try:
             return f"{int(d)} {aylar[int(mo) - 1]} {int(y)}" if mo != "00" and d != "00" else str(int(y))
@@ -122,7 +130,10 @@ def build_facts(out):
         n = 0
         for b in res["results"]["bindings"]:
             label = b["label"]["value"]
-            val = fmt_value(prop, b["v"]["value"])
+            try:
+                val = fmt_value(prop, b["v"]["value"])
+            except Exception:  # noqa: BLE001
+                val = None
             if not val:
                 continue
             key = (label, prop)
